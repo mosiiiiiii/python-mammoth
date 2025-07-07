@@ -33,6 +33,7 @@ class _AbstractNumLevel(object):
     level_index = cobble.field()
     is_ordered = cobble.field()
     paragraph_style_id = cobble.field()
+    numbering_format = cobble.field()
 
 
 def _read_abstract_num_levels(element):
@@ -52,6 +53,7 @@ def _read_abstract_num_level(element):
         level_index=level_index,
         is_ordered=is_ordered,
         paragraph_style_id=paragraph_style_id,
+        numbering_format=num_fmt,
     )
 
 
@@ -110,6 +112,7 @@ class Numbering(object):
             return numbering_level(
                 level_index=abstract_num_level.level_index,
                 is_ordered=abstract_num_level.is_ordered,
+                numbering_format=abstract_num_level.numbering_format,
             )
 
 

@@ -326,7 +326,50 @@ class _DocumentConverter(documents.element_visitor(args=1)):
 
     def _find_html_path_for_paragraph(self, paragraph):
         default = html_paths.path([html_paths.element("p", fresh=True)])
-        return self._find_html_path(paragraph, "paragraph", default, warn_unrecognised=True)
+        html_path = self._find_html_path(paragraph, "paragraph", default, warn_unrecognised=True)
+        
+        # Add type attribute for ordered lists based on numbering format
+        if paragraph.numbering and paragraph.numbering.is_ordered and paragraph.numbering.numbering_format:
+            html_path = self._add_numbering_format_to_path(html_path, paragraph.numbering.numbering_format)
+        
+        return html_path
+
+    def _add_numbering_format_to_path(self, html_path, numbering_format):
+        """Add type attribute to ol elements based on the numbering format"""
+        # Map DOCX numbering formats to HTML ol type attributes
+        format_map = {
+            'decimal': '1',
+            'lowerLetter': 'a',
+            'upperLetter': 'A',
+            'lowerRoman': 'i',
+            'upperRoman': 'I'
+        }
+        
+        ol_type = format_map.get(numbering_format)
+        if not ol_type:
+            return html_path
+        
+        # Find and modify ol elements in the path
+        modified_elements = []
+        for element in html_path.elements:
+            if hasattr(element, 'tag') and 'ol' in element.tag.tag_names:
+                # Create new attributes dictionary with type
+                new_attributes = dict(element.tag.attributes)
+                new_attributes['type'] = ol_type
+                
+                # Create new tag and element with the type attribute
+                new_tag = html.tag(
+                    tag_names=element.tag.tag_names,
+                    attributes=new_attributes,
+                    collapsible=element.tag.collapsible,
+                    separator=element.tag.separator
+                )
+                modified_element = html_paths.HtmlPathElement(new_tag)
+                modified_elements.append(modified_element)
+            else:
+                modified_elements.append(element)
+        
+        return html_paths.path(modified_elements)
 
     def _find_html_path_for_run(self, run):
         return self._find_html_path(run, "run", default=html_paths.empty, warn_unrecognised=True)
@@ -350,6 +393,7 @@ class _DocumentConverter(documents.element_visitor(args=1)):
             document_matcher = style.document_matcher
             if _document_matcher_matches(document_matcher, element, element_type):
                 return style
+        return None
 
     def _note_html_id(self, note):
         return self._referent_html_id(note.note_type, note.note_id)

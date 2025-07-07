@@ -207,13 +207,29 @@ def table_cell(children, colspan=None, rowspan=None):
 def table_cell_unmerged(children, colspan, rowspan, vmerge):
     return TableCellUnmerged(children=children, colspan=colspan, rowspan=rowspan, vmerge=vmerge)
 
-def numbering_level(level_index, is_ordered):
-    return _NumberingLevel(str(level_index), bool(is_ordered))
+def numbering_level(level_index, is_ordered, numbering_format=None):
+    return _NumberingLevel(str(level_index), bool(is_ordered), numbering_format)
 
-@cobble.data
 class _NumberingLevel(object):
-    level_index = cobble.field()
-    is_ordered = cobble.field()
+    def __init__(self, level_index, is_ordered, numbering_format):
+        self.level_index = level_index
+        self.is_ordered = is_ordered
+        self.numbering_format = numbering_format
+    
+    def __eq__(self, other):
+        if not isinstance(other, _NumberingLevel):
+            return False
+        return (self.level_index == other.level_index and 
+                self.is_ordered == other.is_ordered)
+    
+    def __ne__(self, other):
+        return not self.__eq__(other)
+    
+    def __hash__(self):
+        return hash((self.level_index, self.is_ordered))
+    
+    def __repr__(self):
+        return f"_NumberingLevel(level_index={self.level_index!r}, is_ordered={self.is_ordered!r}, numbering_format={self.numbering_format!r})"
 
 @cobble.data
 class Note(Element):
