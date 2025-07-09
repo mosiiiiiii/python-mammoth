@@ -75,6 +75,13 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         # interrupted and later resumed. The key contains the numbering
         # format and the nesting level so independent lists don’t interfere.
         self._list_counters = {}
+        # Track counters for numbered headings (outline numbering) so we can
+        # recreate prefixes such as “1.”, “6.2”, … when headings are also
+        # part of a numbered list/outline. Keys are the numbering definition
+        # (abstract_num_id or num_id) so independent numbering sequences do
+        # not interfere with each other. Each value is another mapping of
+        # level -> current counter.
+        self._heading_counters = {}
 
     def visit_image(self, image, context):
         try:
@@ -99,11 +106,18 @@ class _DocumentConverter(documents.element_visitor(args=1)):
 
 
     def visit_paragraph(self, paragraph, context):
-        # If the paragraph belongs to a list, construct an appropriate HTML
-        # path dynamically so we don’t depend on a style-map entry. This also
-        # means list items are preserved even when Word uses a custom style
-        # (e.g. “Paragrafo elenco”).
-        if paragraph.numbering is not None:
+        # Headings can also be numbered in Word using outline numbering. In
+        # such cases we *don’t* want to wrap them in <ol>/<li>; instead we
+        # keep them as headings (h1, h2, …) but prepend the computed number
+        # as plain text so the resulting HTML matches what is shown in Word.
+
+        is_numbered_heading = (
+            paragraph.numbering is not None and self._is_heading(paragraph)
+        )
+
+        # Normal list paragraphs (that aren’t headings) are still converted
+        # to <ul>/<ol>/<li>.
+        if paragraph.numbering is not None and not is_numbered_heading:
             html_path = self._list_html_path(paragraph.numbering)
 
             def children():
@@ -117,6 +131,14 @@ class _DocumentConverter(documents.element_visitor(args=1)):
 
         def children():
             content = self._visit_all(paragraph.children, context)
+
+            # Prepend numbering prefix for numbered headings so that the HTML
+            # contains the visible outline numbers (e.g. “6.2”).
+            if is_numbered_heading:
+                prefix = self._heading_number_prefix(paragraph.numbering)
+                if prefix:
+                    content = [html.text(prefix + " ")] + content
+
             if self._ignore_empty_paragraphs:
                 return content
             else:
@@ -346,7 +368,7 @@ class _DocumentConverter(documents.element_visitor(args=1)):
 
     def _find_html_path_for_paragraph(self, paragraph):
         # List paragraphs are handled separately in visit_paragraph.
-        if paragraph.numbering is not None:
+        if paragraph.numbering is not None and not self._is_heading(paragraph):
             return self._list_html_path(paragraph.numbering)
 
         default = html_paths.path([html_paths.element("p", fresh=True)])
@@ -413,6 +435,47 @@ class _DocumentConverter(documents.element_visitor(args=1)):
 
         return html_paths.path(elements)
 
+
+    # ------------------------------------------------------------------
+    # Heading numbering helpers
+    # ------------------------------------------------------------------
+
+    def _is_heading(self, paragraph):
+        """Return True if the paragraph appears to be a heading (style name
+        or ID starts with “heading”)."""
+        name = (paragraph.style_name or "").lower()
+        sid = (paragraph.style_id or "").lower()
+        return name.startswith("heading") or sid.startswith("heading")
+
+    def _heading_number_prefix(self, numbering):
+        """Return the textual prefix (e.g. “1.”, “6.2”) for a numbered
+        heading, keeping counters per numbering instance."""
+
+        level = int(numbering.level_index)
+
+        # Ensure counters dict exists
+        counters = self._heading_counters
+
+        # Increment counter for current level
+        counters[level] = counters.get(level, 0) + 1
+
+        # Reset counters for deeper levels
+        for deeper in list(counters.keys()):
+            if deeper > level:
+                del counters[deeper]
+
+        # Build prefix string from level 0 up to current level
+        parts = [str(counters[i]) for i in range(level + 1) if i in counters]
+        if not parts:
+            return ""
+
+        prefix = ".".join(parts)
+
+        # Word usually appends a trailing dot to top-level headings only.
+        if level == 0:
+            prefix += "."
+
+        return prefix
 
     # ------------------------------------------------------------------
     # Existing helper methods that were accidentally deleted need to be
