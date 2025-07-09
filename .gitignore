@@ -5,3 +5,5 @@
 /.tox
 /MANIFEST
 /build
+.python-version
+.vscode
