@@ -71,6 +71,10 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         self._referenced_comments = []
         self._convert_image = convert_image
         self._comments = comments
+        # Track list counters so we can emit <li value="N"> when a list is
+        # interrupted and later resumed. The key contains the numbering
+        # format and the nesting level so independent lists don’t interfere.
+        self._list_counters = {}
 
     def visit_image(self, image, context):
         try:
@@ -95,6 +99,22 @@ class _DocumentConverter(documents.element_visitor(args=1)):
 
 
     def visit_paragraph(self, paragraph, context):
+        # If the paragraph belongs to a list, construct an appropriate HTML
+        # path dynamically so we don’t depend on a style-map entry. This also
+        # means list items are preserved even when Word uses a custom style
+        # (e.g. “Paragrafo elenco”).
+        if paragraph.numbering is not None:
+            html_path = self._list_html_path(paragraph.numbering)
+
+            def children():
+                content = self._visit_all(paragraph.children, context)
+                if self._ignore_empty_paragraphs:
+                    return content
+                else:
+                    return [html.force_write] + content
+
+            return html_path.wrap(children)
+
         def children():
             content = self._visit_all(paragraph.children, context)
             if self._ignore_empty_paragraphs:
@@ -325,14 +345,74 @@ class _DocumentConverter(documents.element_visitor(args=1)):
 
 
     def _find_html_path_for_paragraph(self, paragraph):
+        # List paragraphs are handled separately in visit_paragraph.
+        if paragraph.numbering is not None:
+            return self._list_html_path(paragraph.numbering)
+
         default = html_paths.path([html_paths.element("p", fresh=True)])
         return self._find_html_path(paragraph, "paragraph", default, warn_unrecognised=True)
 
     def _find_html_path_for_run(self, run):
         return self._find_html_path(run, "run", default=html_paths.empty, warn_unrecognised=True)
 
+    # ------------------------------------------------------------------
+    # List helpers
+    # ------------------------------------------------------------------
+    def _list_html_path(self, numbering):
+        """Return an HtmlPath that produces the correct <ul>/<ol>/<li>
+        hierarchy for the given Word numbering level."""
+
+        level = int(numbering.level_index)
+        ordered = numbering.is_ordered
+
+        list_tag = "ol" if ordered else "ul"
+
+        list_attributes = {}
+
+        # For ordered lists, set the HTML ‘type’ attribute when Word uses
+        # letters or roman numerals.
+        if ordered and numbering.num_fmt:
+            type_char = _num_fmt_to_ol_type(numbering.num_fmt)
+            if type_char:
+                list_attributes["type"] = type_char
+
+        # Increment running counter and decide whether the current <li>
+        # needs its explicit value attribute.
+        li_attributes = {}
+        if ordered:
+            counter_key = (numbering.num_id, numbering.level_index)
+            current_value = self._list_counters.get(counter_key, 0) + 1
+            self._list_counters[counter_key] = current_value
+            if current_value != 1:
+                li_attributes["value"] = str(current_value)
+
+        elements = []
+
+        # For ancestor levels we don’t know whether they’re ordered or not,
+        # so accept both ul and ol.
+        for _ in range(level):
+            elements.append(html_paths.element(["ul", "ol"], fresh=False))
+            elements.append(html_paths.element("li", fresh=False))
+
+        # The actual list for this level
+        elements.append(html_paths.element([list_tag], attributes=list_attributes, fresh=False))
+        # The list item
+        elements.append(html_paths.element("li", attributes=li_attributes, fresh=True))
+
+        return html_paths.path(elements)
+
+
+    # ------------------------------------------------------------------
+    # Existing helper methods that were accidentally deleted need to be
+    # reinstated because other parts of the converter still rely on them.
+    # ------------------------------------------------------------------
 
     def _find_html_path(self, element, element_type, default, warn_unrecognised=False):
+        """Return the first style mapping that matches *element* or *default*.
+
+        This is the original logic from Mammoth.  It is still used for runs,
+        tables, comments, etc., so we add it back unchanged.
+        """
         style = self._find_style(element, element_type)
         if style is not None:
             return style.html_path
@@ -351,6 +431,10 @@ class _DocumentConverter(documents.element_visitor(args=1)):
             if _document_matcher_matches(document_matcher, element, element_type):
                 return style
 
+    # ------------------------------------------------------------------
+    # ID helpers (used for notes, comments and bookmarks)
+    # ------------------------------------------------------------------
+
     def _note_html_id(self, note):
         return self._referent_html_id(note.note_type, note.note_id)
 
@@ -367,9 +451,30 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         return "{0}{1}".format(self._id_prefix, suffix)
 
 
+# ------------------------------------------------------------------
+# Lightweight value object used for highlight styles (existing feature)
+# ------------------------------------------------------------------
+
+
 @cobble.data
 class Highlight:
     color = cobble.field()
+
+
+# ----------------------------------------------------------------------
+# Utility
+# ----------------------------------------------------------------------
+
+def _num_fmt_to_ol_type(num_fmt):
+    """Map Word’s numFmt names to the HTML ‘type’ attribute values."""
+    mapping = {
+        "decimal": None,  # default
+        "lowerLetter": "a",
+        "upperLetter": "A",
+        "lowerRoman": "i",
+        "upperRoman": "I",
+    }
+    return mapping.get(num_fmt)
 
 
 def _document_matcher_matches(matcher, element, element_type):
@@ -396,9 +501,23 @@ def _document_matcher_matches(matcher, element, element_type):
             ) and (
                 element_type != "paragraph" or
                 matcher.numbering is None or
-                matcher.numbering == element.numbering
+                _numbering_matches(matcher.numbering, element.numbering)
             )
         )
+
+
+def _numbering_matches(matcher_numbering, element_numbering):
+    """Return True when the list level and ordered/unordered flag match.
+    Other properties (num_fmt, counters, …) are ignored so that existing
+    style-map rules stay compatible after we added new fields."""
+
+    if matcher_numbering is None or element_numbering is None:
+        return matcher_numbering is element_numbering
+
+    return (
+        matcher_numbering.level_index == element_numbering.level_index and
+        matcher_numbering.is_ordered == element_numbering.is_ordered
+    )
 
 
 def _comment_author_label(comment):

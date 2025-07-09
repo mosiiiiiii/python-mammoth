@@ -32,6 +32,7 @@ class _AbstractNum(object):
 class _AbstractNumLevel(object):
     level_index = cobble.field()
     is_ordered = cobble.field()
+    num_fmt = cobble.field()
     paragraph_style_id = cobble.field()
 
 
@@ -51,6 +52,7 @@ def _read_abstract_num_level(element):
     return _AbstractNumLevel(
         level_index=level_index,
         is_ordered=is_ordered,
+        num_fmt=num_fmt,
         paragraph_style_id=paragraph_style_id,
     )
 
@@ -95,7 +97,7 @@ class Numbering(object):
             if abstract_num is None:
                 return None
             elif abstract_num.num_style_link is None:
-                return self._to_numbering_level(abstract_num.levels.get(level))
+                return self._to_numbering_level(abstract_num.levels.get(level), num_id=num_id)
             else:
                 style = self._styles.find_numbering_style_by_id(abstract_num.num_style_link)
                 return self.find_level(style.num_id, level)
@@ -103,13 +105,15 @@ class Numbering(object):
     def find_level_by_paragraph_style_id(self, style_id):
         return self._levels_by_paragraph_style_id.get(style_id)
 
-    def _to_numbering_level(self, abstract_num_level):
+    def _to_numbering_level(self, abstract_num_level, *, num_id=None):
         if abstract_num_level is None:
             return None
         else:
             return numbering_level(
                 level_index=abstract_num_level.level_index,
                 is_ordered=abstract_num_level.is_ordered,
+                num_fmt=abstract_num_level.num_fmt,
+                num_id=num_id,
             )
 
 
