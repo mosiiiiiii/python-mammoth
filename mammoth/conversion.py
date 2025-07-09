@@ -380,10 +380,22 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         # needs its explicit value attribute.
         li_attributes = {}
         if ordered:
-            counter_key = (numbering.num_id, numbering.level_index)
-            current_value = self._list_counters.get(counter_key, 0) + 1
-            self._list_counters[counter_key] = current_value
-            if current_value != 1:
+            key_source = numbering.abstract_num_id or numbering.num_id
+            counter_key = (key_source, numbering.level_index)
+
+            start_val = numbering.start or 1
+            if counter_key not in self._list_counters:
+                 self._list_counters[counter_key] = start_val - 1
+
+            # Increment
+            self._list_counters[counter_key] += 1
+            current_value = self._list_counters[counter_key]
+
+            # If this is the first list item and start >1, put start on <ol>.
+            if current_value == start_val and start_val > 1:
+                list_attributes["start"] = str(start_val)
+            elif current_value != start_val:
+                # Non-first items interrupted list; use value attr to preserve
                 li_attributes["value"] = str(current_value)
 
         elements = []

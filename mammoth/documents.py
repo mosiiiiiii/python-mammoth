@@ -227,9 +227,12 @@ class _NumberingLevel(object):
     # The numbering instance id (w:numId) so we can distinguish independent
     # lists that share the same level_index.
     num_id = cobble.field(default=None)
+    abstract_num_id = cobble.field(default=None)
+    # The starting number/letter for this level (None means 1)
+    start = cobble.field(default=None)
 
-def numbering_level(level_index, is_ordered, *, num_fmt=None, num_id=None):
-    return _NumberingLevel(str(level_index), bool(is_ordered), num_fmt, num_id)
+def numbering_level(level_index, is_ordered, *, num_fmt=None, num_id=None, abstract_num_id=None, start=None):
+    return _NumberingLevel(str(level_index), bool(is_ordered), num_fmt, num_id, abstract_num_id, start)
 
 @cobble.data
 class Note(Element):
