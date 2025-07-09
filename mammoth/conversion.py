@@ -456,10 +456,18 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         # Ensure counters dict exists
         counters = self._heading_counters
 
+        # If this heading starts at a deeper level without its parent ever
+        # having appeared (common in some documents where the first visible
+        # outline level is “1.1 …” rather than “1. …”), synthesise the
+        # missing parent counter(s) so the hierarchy is preserved.
+        if level > 0 and (level - 1) not in counters:
+            counters[level - 1] = 1
+
         # Increment counter for current level
         counters[level] = counters.get(level, 0) + 1
 
-        # Reset counters for deeper levels
+        # Reset counters for deeper levels so they start fresh whenever we
+        # move up in the hierarchy.
         for deeper in list(counters.keys()):
             if deeper > level:
                 del counters[deeper]
