@@ -207,13 +207,30 @@ def table_cell(children, colspan=None, rowspan=None):
 def table_cell_unmerged(children, colspan, rowspan, vmerge):
     return TableCellUnmerged(children=children, colspan=colspan, rowspan=rowspan, vmerge=vmerge)
 
-def numbering_level(level_index, is_ordered):
-    return _NumberingLevel(str(level_index), bool(is_ordered))
+
+# Extend the representation of a numbering level so that we can retain the
+# original numbering format (decimal, lowerLetter, lowerRoman, …).  This is
+# needed to recreate ordered-list markers such as a), i), I), … in HTML.
+#
+# The new field is optional and defaults to None so that any existing style-
+# map matcher that only specifies level_index/is_ordered still matches.
 
 @cobble.data
 class _NumberingLevel(object):
     level_index = cobble.field()
     is_ordered = cobble.field()
+    # For ordered lists, Word specifies the numbering format in <w:numFmt>.
+    # We keep it so the converter can decide on the HTML “type” attribute.
+    num_fmt = cobble.field(default=None)
+    # The numbering instance id (w:numId) so we can distinguish independent
+    # lists that share the same level_index.
+    num_id = cobble.field(default=None)
+    abstract_num_id = cobble.field(default=None)
+    # The starting number/letter for this level (None means 1)
+    start = cobble.field(default=None)
+
+def numbering_level(level_index, is_ordered, *, num_fmt=None, num_id=None, abstract_num_id=None, start=None):
+    return _NumberingLevel(str(level_index), bool(is_ordered), num_fmt, num_id, abstract_num_id, start)
 
 @cobble.data
 class Note(Element):

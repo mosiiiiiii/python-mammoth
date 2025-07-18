@@ -71,6 +71,17 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         self._referenced_comments = []
         self._convert_image = convert_image
         self._comments = comments
+        # Track list counters so we can emit <li value="N"> when a list is
+        # interrupted and later resumed. The key contains the numbering
+        # format and the nesting level so independent lists don’t interfere.
+        self._list_counters = {}
+        # Track counters for numbered headings (outline numbering) so we can
+        # recreate prefixes such as “1.”, “6.2”, … when headings are also
+        # part of a numbered list/outline. Keys are the numbering definition
+        # (abstract_num_id or num_id) so independent numbering sequences do
+        # not interfere with each other. Each value is another mapping of
+        # level -> current counter.
+        self._heading_counters = {}
 
     def visit_image(self, image, context):
         try:
@@ -95,8 +106,39 @@ class _DocumentConverter(documents.element_visitor(args=1)):
 
 
     def visit_paragraph(self, paragraph, context):
+        # Headings can also be numbered in Word using outline numbering. In
+        # such cases we *don’t* want to wrap them in <ol>/<li>; instead we
+        # keep them as headings (h1, h2, …) but prepend the computed number
+        # as plain text so the resulting HTML matches what is shown in Word.
+
+        is_numbered_heading = (
+            paragraph.numbering is not None and self._is_heading(paragraph)
+        )
+
+        # Normal list paragraphs (that aren’t headings) are still converted
+        # to <ul>/<ol>/<li>.
+        if paragraph.numbering is not None and not is_numbered_heading:
+            html_path = self._list_html_path(paragraph.numbering)
+
+            def children():
+                content = self._visit_all(paragraph.children, context)
+                if self._ignore_empty_paragraphs:
+                    return content
+                else:
+                    return [html.force_write] + content
+
+            return html_path.wrap(children)
+
         def children():
             content = self._visit_all(paragraph.children, context)
+
+            # Prepend numbering prefix for numbered headings so that the HTML
+            # contains the visible outline numbers (e.g. “6.2”).
+            if is_numbered_heading:
+                prefix = self._heading_number_prefix(paragraph.numbering)
+                if prefix:
+                    content = [html.text(prefix + " ")] + content
+
             if self._ignore_empty_paragraphs:
                 return content
             else:
@@ -325,14 +367,122 @@ class _DocumentConverter(documents.element_visitor(args=1)):
 
 
     def _find_html_path_for_paragraph(self, paragraph):
+        # List paragraphs are handled separately in visit_paragraph.
+        if paragraph.numbering is not None and not self._is_heading(paragraph):
+            return self._list_html_path(paragraph.numbering)
+
         default = html_paths.path([html_paths.element("p", fresh=True)])
         return self._find_html_path(paragraph, "paragraph", default, warn_unrecognised=True)
 
     def _find_html_path_for_run(self, run):
         return self._find_html_path(run, "run", default=html_paths.empty, warn_unrecognised=True)
 
+    def _list_html_path(self, numbering):
+        """Return an HtmlPath that produces the correct <ul>/<ol>/<li>
+        hierarchy for the given Word numbering level."""
+
+        level = int(numbering.level_index)
+        ordered = numbering.is_ordered
+
+        list_tag = "ol" if ordered else "ul"
+
+        list_attributes = {}
+
+        # For ordered lists, set the HTML ‘type’ attribute when Word uses
+        # letters or roman numerals.
+        if ordered and numbering.num_fmt:
+            type_char = _num_fmt_to_ol_type(numbering.num_fmt)
+            if type_char:
+                list_attributes["type"] = type_char
+
+        # Increment running counter and decide whether the current <li>
+        # needs its explicit value attribute.
+        li_attributes = {}
+        if ordered:
+            key_source = numbering.abstract_num_id or numbering.num_id
+            counter_key = (key_source, numbering.level_index)
+
+            start_val = numbering.start or 1
+            if counter_key not in self._list_counters:
+                 self._list_counters[counter_key] = start_val - 1
+
+            # Increment
+            self._list_counters[counter_key] += 1
+            current_value = self._list_counters[counter_key]
+
+            # If this is the first list item and start >1, put start on <ol>.
+            if current_value == start_val and start_val > 1:
+                list_attributes["start"] = str(start_val)
+            elif current_value != start_val:
+                # Non-first items interrupted list; use value attr to preserve
+                li_attributes["value"] = str(current_value)
+
+        elements = []
+
+        # For ancestor levels we don’t know whether they’re ordered or not,
+        # so accept both ul and ol.
+        for _ in range(level):
+            elements.append(html_paths.element(["ul", "ol"], fresh=False))
+            elements.append(html_paths.element("li", fresh=False))
+
+        # The actual list for this level
+        elements.append(html_paths.element([list_tag], attributes=list_attributes, fresh=False))
+        # The list item
+        elements.append(html_paths.element("li", attributes=li_attributes, fresh=True))
+
+        return html_paths.path(elements)
+
+    def _is_heading(self, paragraph):
+        """Return True if the paragraph appears to be a heading (style name
+        or ID starts with “heading”)."""
+        name = (paragraph.style_name or "").lower()
+        sid = (paragraph.style_id or "").lower()
+        return name.startswith("heading") or sid.startswith("heading")
+
+    def _heading_number_prefix(self, numbering):
+        """Return the textual prefix (e.g. “1.”, “6.2”) for a numbered
+        heading, keeping counters per numbering instance."""
+
+        level = int(numbering.level_index)
+
+        # Ensure counters dict exists
+        counters = self._heading_counters
+
+        # If this heading starts at a deeper level without its parent ever
+        # having appeared (common in some documents where the first visible
+        # outline level is “1.1 …” rather than “1. …”), synthesise the
+        # missing parent counter(s) so the hierarchy is preserved.
+        if level > 0 and (level - 1) not in counters:
+            counters[level - 1] = 1
+
+        # Increment counter for current level
+        counters[level] = counters.get(level, 0) + 1
+
+        # Reset counters for deeper levels so they start fresh whenever we
+        # move up in the hierarchy.
+        for deeper in list(counters.keys()):
+            if deeper > level:
+                del counters[deeper]
+
+        # Build prefix string from level 0 up to current level
+        parts = [str(counters[i]) for i in range(level + 1) if i in counters]
+        if not parts:
+            return ""
+
+        prefix = ".".join(parts)
+
+        # Word usually appends a trailing dot to top-level headings only.
+        if level == 0:
+            prefix += "."
+
+        return prefix
 
     def _find_html_path(self, element, element_type, default, warn_unrecognised=False):
+        """Return the first style mapping that matches *element* or *default*.
+
+        This is the original logic from Mammoth.  It is still used for runs,
+        tables, comments, etc., so we add it back unchanged.
+        """
         style = self._find_style(element, element_type)
         if style is not None:
             return style.html_path
@@ -372,6 +522,18 @@ class Highlight:
     color = cobble.field()
 
 
+def _num_fmt_to_ol_type(num_fmt):
+    """Map Word’s numFmt names to the HTML ‘type’ attribute values."""
+    mapping = {
+        "decimal": None,  # default
+        "lowerLetter": "a",
+        "upperLetter": "A",
+        "lowerRoman": "i",
+        "upperRoman": "I",
+    }
+    return mapping.get(num_fmt)
+
+
 def _document_matcher_matches(matcher, element, element_type):
     if matcher.element_type in ["underline", "strikethrough", "all_caps", "small_caps", "bold", "italic", "comment_reference"]:
         return matcher.element_type == element_type
@@ -396,9 +558,23 @@ def _document_matcher_matches(matcher, element, element_type):
             ) and (
                 element_type != "paragraph" or
                 matcher.numbering is None or
-                matcher.numbering == element.numbering
+                _numbering_matches(matcher.numbering, element.numbering)
             )
         )
+
+
+def _numbering_matches(matcher_numbering, element_numbering):
+    """Return True when the list level and ordered/unordered flag match.
+    Other properties (num_fmt, counters, …) are ignored so that existing
+    style-map rules stay compatible after we added new fields."""
+
+    if matcher_numbering is None or element_numbering is None:
+        return matcher_numbering is element_numbering
+
+    return (
+        matcher_numbering.level_index == element_numbering.level_index and
+        matcher_numbering.is_ordered == element_numbering.is_ordered
+    )
 
 
 def _comment_author_label(comment):
