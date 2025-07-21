@@ -127,6 +127,7 @@ class _DocumentConverter(documents.element_visitor(args=1)):
                 else:
                     return [html.force_write] + content
 
+            html_path = self._add_alignment_to_path(html_path, paragraph.alignment)
             return html_path.wrap(children)
 
         def children():
@@ -145,6 +146,7 @@ class _DocumentConverter(documents.element_visitor(args=1)):
                 return [html.force_write] + content
 
         html_path = self._find_html_path_for_paragraph(paragraph)
+        html_path = self._add_alignment_to_path(html_path, paragraph.alignment)
         return html_path.wrap(children)
 
 
@@ -431,6 +433,65 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         elements.append(html_paths.element("li", attributes=li_attributes, fresh=True))
 
         return html_paths.path(elements)
+
+    def _add_alignment_to_path(self, html_path, alignment):
+        """Return *html_path* with inline text-alignment style applied to the
+        innermost element if *alignment* is not None.*
+
+        Word stores paragraph alignment in <w:jc w:val="...">.  Values we
+        care about are ``left``, ``center``, ``right`` and ``both`` (justify).
+        When converting to HTML we keep left-aligned paragraphs unchanged
+        (that is the browser default).  For the other alignments we append a
+        ``style="text-align: …;"`` declaration to the innermost element of
+        *html_path* (usually <p> or <li>).  If the element already has a
+        ``style`` attribute we append to it, otherwise we add a new one.
+        """
+        if alignment is None:
+            return html_path
+
+        ALIGN_MAP = {
+            "center": "center",
+            "right": "right",
+            "both": "justify",
+            "justify": "justify",
+            "end": "right",
+            "start": "left",
+            # Treat explicit "left" the same as None (browser default)
+        }
+        css_value = ALIGN_MAP.get(alignment)
+        if css_value in (None, "left"):
+            return html_path
+
+        # html_path.elements is an ordered list where the last element is the
+        # innermost element (e.g. <p> or <li>).  Create a shallow copy so we
+        # don’t mutate the original path shared elsewhere.
+        elements = list(html_path.elements)
+        if not elements:
+            return html_path
+
+        innermost = elements[-1]
+        # Copy existing attributes and append/merge style
+        attrs = dict(innermost.tag.attributes)
+        existing_style = attrs.get("style", "").strip()
+        align_declaration = "text-align: {0};".format(css_value)
+        if existing_style:
+            # Ensure a trailing semicolon for proper separation
+            if not existing_style.endswith(";"):
+                existing_style += ";"
+            attrs["style"] = "{0} {1}".format(existing_style, align_declaration)
+        else:
+            attrs["style"] = align_declaration
+
+        # Rebuild HtmlPathElement with updated attributes, preserving other
+        # Tag properties.
+        new_tag = html.tag(
+            tag_names=innermost.tag.tag_names,
+            attributes=attrs,
+            collapsible=innermost.tag.collapsible,
+            separator=innermost.tag.separator,
+        )
+        elements[-1] = html_paths.HtmlPathElement(new_tag)
+        return html_paths.HtmlPath(elements)
 
     def _is_heading(self, paragraph):
         """Return True if the paragraph appears to be a heading (style name
