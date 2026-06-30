@@ -1478,6 +1478,59 @@ class ImageTests(object):
         assert_equal(None, result.value)
 
 
+class ChartTests(object):
+    CHART_RELATIONSHIP_ID = "rId7"
+
+    def _read_chart(self, mocks, chart_xml):
+        relationships = Relationships([
+            _chart_relationship(self.CHART_RELATIONSHIP_ID, "charts/chart1.xml"),
+        ])
+        docx_file = mocks.mock()
+        funk.allows(docx_file).open("word/charts/chart1.xml") \
+            .returns(io.BytesIO(chart_xml.encode("utf-8")))
+
+        return _read_document_xml_element(
+            _create_inline_chart(self.CHART_RELATIONSHIP_ID),
+            relationships=relationships,
+            docx_file=docx_file,
+        )
+
+    def test_native_chart_is_rendered_as_inline_svg(self, mocks):
+        result = self._read_chart(mocks, _BAR_CHART_XML)
+
+        image = result.value
+        assert_equal(documents.Image, type(image))
+        assert_equal("image/svg+xml", image.content_type)
+        with image.open() as svg_file:
+            svg = svg_file.read().decode("utf-8")
+        assert "<svg" in svg
+        assert_equal([], result.messages)
+
+    def test_chart_values_are_included_in_alt_text(self, mocks):
+        result = self._read_chart(mocks, _BAR_CHART_XML)
+
+        alt_text = result.value.alt_text
+        assert "Revenue" in alt_text
+        assert "2023" in alt_text and "10" in alt_text
+        assert "2024" in alt_text and "15" in alt_text
+
+    def test_warning_when_chart_has_no_relationship_id(self):
+        chart_ref = xml_element("c:chart")
+        drawing = xml_element("w:drawing", {}, [
+            xml_element("wp:inline", {}, [
+                xml_element("a:graphic", {}, [
+                    xml_element("a:graphicData", {}, [chart_ref]),
+                ]),
+            ]),
+        ])
+        result = _read_document_xml_element(drawing)
+        assert_equal(None, result.value)
+        assert_equal(
+            [results.warning("A c:chart element without a relationship ID was ignored")],
+            result.messages,
+        )
+
+
 def test_footnote_reference_has_id_read():
     footnote_xml = xml_element("w:footnoteReference", {"w:id": "4"})
     footnote = _read_and_get_document_xml_element(footnote_xml)
@@ -1663,6 +1716,59 @@ def _create_image_elements(blip, description=None, title=None):
             ])
         ])
     ]
+
+def _create_inline_chart(relationship_id):
+    return xml_element("w:drawing", {}, [
+        xml_element("wp:inline", {}, [
+            xml_element("wp:docPr", {}),
+            xml_element("a:graphic", {}, [
+                xml_element("a:graphicData", {}, [
+                    xml_element("c:chart", {"r:id": relationship_id}),
+                ]),
+            ]),
+        ]),
+    ])
+
+
+def _chart_relationship(relationship_id, target):
+    return Relationship(
+        relationship_id=relationship_id,
+        target=target,
+        type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart",
+    )
+
+
+_BAR_CHART_XML = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <c:chart>
+    <c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title>
+    <c:plotArea>
+      <c:barChart>
+        <c:barDir val="col"/>
+        <c:grouping val="clustered"/>
+        <c:ser>
+          <c:tx><c:strRef><c:f>Sheet1!$B$1</c:f>
+            <c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Sales</c:v></c:pt></c:strCache>
+          </c:strRef></c:tx>
+          <c:cat><c:strRef><c:f>Sheet1!$A$2:$A$3</c:f>
+            <c:strCache><c:ptCount val="2"/>
+              <c:pt idx="0"><c:v>2023</c:v></c:pt>
+              <c:pt idx="1"><c:v>2024</c:v></c:pt>
+            </c:strCache>
+          </c:strRef></c:cat>
+          <c:val><c:numRef><c:f>Sheet1!$B$2:$B$3</c:f>
+            <c:numCache><c:ptCount val="2"/>
+              <c:pt idx="0"><c:v>10</c:v></c:pt>
+              <c:pt idx="1"><c:v>15</c:v></c:pt>
+            </c:numCache>
+          </c:numRef></c:val>
+        </c:ser>
+      </c:barChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>"""
+
 
 def _embedded_blip(relationship_id):
     return _blip({"r:embed": relationship_id})

@@ -1,4 +1,5 @@
 import contextlib
+import io
 import re
 import sys
 
@@ -6,7 +7,11 @@ from .. import documents
 from .. import results
 from .. import lists
 from .. import transforms
+from .. import charts
+from .. import chart_render
 from . import complex_fields
+from . import charts_xml
+from . import office_xml
 from .dingbats import dingbats
 from .xmlparser import node_types, XmlElement, null_xml_element
 from .styles_xml import Styles
@@ -14,6 +19,12 @@ from .uris import replace_fragment, uri_to_zip_entry_name
 
 if sys.version_info >= (3, ):
     unichr = chr
+
+
+_METAFILE_CONTENT_TYPES = frozenset([
+    "image/x-emf", "image/emf",
+    "image/x-wmf", "image/wmf",
+])
 
 
 def reader(
@@ -504,7 +515,54 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
             .find_children("pic:pic") \
             .find_children("pic:blipFill") \
             .find_children("a:blip")
-        return _read_blips(blips, alt_text)
+        blip_result = _read_blips(blips, alt_text)
+        if blip_result.elements:
+            return blip_result
+
+        # No picture: the drawing may be a native Word chart (c:chart), which we
+        # rebuild as an inline SVG from its cached data.
+        chart_refs = element.find_children("a:graphic") \
+            .find_children("a:graphicData") \
+            .find_children("c:chart")
+        for chart_ref in chart_refs:
+            return _read_chart(chart_ref.attributes.get("r:id"), alt_text)
+
+        return blip_result
+
+    def _read_chart(relationship_id, alt_text):
+        if relationship_id is None:
+            return _empty_result_with_message(
+                results.warning("A c:chart element without a relationship ID was ignored"))
+
+        target = relationships.find_target_by_relationship_id(relationship_id)
+        chart_path = uri_to_zip_entry_name("word", target)
+
+        try:
+            with docx_file.open(chart_path) as chart_fileobj:
+                chart_element = office_xml.read(chart_fileobj)
+            chart = charts_xml.read_chart(chart_element)
+            summary = charts.text_summary(chart)
+        except Exception as error:
+            return _empty_result_with_message(
+                results.warning("Could not convert chart {0}: {1}".format(chart_path, error)))
+
+        # Prefer a faithful LibreOffice render (real Word styling); fall back to a
+        # dependency-free SVG reconstruction if that is not available.
+        png_bytes = chart_render.render_chart_png(docx_file, chart_path)
+        if png_bytes is not None:
+            image = documents.image(
+                alt_text=alt_text or summary,
+                content_type="image/png",
+                open=lambda: io.BytesIO(png_bytes),
+            )
+        else:
+            svg_bytes = charts.render_svg(chart).encode("utf-8")
+            image = documents.image(
+                alt_text=alt_text or summary,
+                content_type="image/svg+xml",
+                open=lambda: io.BytesIO(svg_bytes),
+            )
+        return _success(image)
 
     def _read_blips(blips, alt_text):
         return _ReadResult.concat(lists.map(lambda blip: _read_blip(blip, alt_text), blips))
@@ -521,6 +579,20 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
     def _read_image(image_file, alt_text):
         image_path, open_image = image_file
         content_type = content_types.find_content_type(image_path)
+
+        # EMF/WMF metafiles can't display in browsers. Word keeps them as the
+        # rendered preview of pasted objects (e.g. OLE Excel), so convert that
+        # preview to PNG when possible rather than emitting a broken image.
+        if content_type in _METAFILE_CONTENT_TYPES:
+            png_bytes = chart_render.render_media_to_png(docx_file, image_path)
+            if png_bytes is not None:
+                image = documents.image(
+                    alt_text=alt_text,
+                    content_type="image/png",
+                    open=lambda: io.BytesIO(png_bytes),
+                )
+                return _element_result_with_messages(image, [])
+
         image = documents.image(alt_text=alt_text, content_type=content_type, open=open_image)
 
         if content_type in ["image/png", "image/gif", "image/jpeg", "image/svg+xml", "image/tiff"]:

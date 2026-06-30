@@ -29,6 +29,12 @@ class _Zip(object):
         except KeyError:
             return False
 
+    def names(self):
+        return self._zip_file.namelist()
+
+    def read_bytes(self, name):
+        return self._zip_file.read(name)
+
     def read_str(self, name):
         return self._zip_file.read(name).decode("utf8")
 

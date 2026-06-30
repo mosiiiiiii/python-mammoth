@@ -9,6 +9,7 @@ _namespaces = [
     ("wp", "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"),
     ("a", "http://schemas.openxmlformats.org/drawingml/2006/main"),
     ("pic", "http://schemas.openxmlformats.org/drawingml/2006/picture"),
+    ("c", "http://schemas.openxmlformats.org/drawingml/2006/chart"),
 
     # Strict format
     ("w", "http://purl.oclc.org/ooxml/wordprocessingml/main"),
@@ -16,6 +17,7 @@ _namespaces = [
     ("wp", "http://purl.oclc.org/ooxml/drawingml/wordprocessingDrawing"),
     ("a", "http://purl.oclc.org/ooxml/drawingml/main"),
     ("pic", "http://purl.oclc.org/ooxml/drawingml/picture"),
+    ("c", "http://purl.oclc.org/ooxml/drawingml/chart"),
 
     # Common
     ("content-types", "http://schemas.openxmlformats.org/package/2006/content-types"),
