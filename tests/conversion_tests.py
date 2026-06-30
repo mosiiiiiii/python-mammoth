@@ -122,6 +122,39 @@ def test_bulleted_paragraphs_are_converted_using_matching_styles():
     assert_equal('<ul><li>Hello</li></ul>', result.value)
 
 
+def test_nested_list_is_kept_inside_parent_item_even_when_parent_has_attributes():
+    # A nested list re-enters its parent <li> via collapsible ancestor
+    # elements, which only merge when their attributes match the parent's.
+    # Parent items can carry a value="N" (resumed numbering) and/or a
+    # text-align style, so the synthesised ancestors must replay those
+    # attributes - otherwise the nested list spills out as a sibling of the
+    # outer list and the outer numbering slips.
+    ordered = lambda index: documents.numbering_level(
+        level_index=0, is_ordered=True, num_id="1", abstract_num_id="1",
+    )
+    unordered_nested = documents.numbering_level(
+        level_index=1, is_ordered=False, num_id="2", abstract_num_id="2",
+    )
+    result = convert_document_element_to_html(
+        documents.document([
+            documents.paragraph(children=[_run_with_text("One")], numbering=ordered(0)),
+            documents.paragraph(children=[_run_with_text("Two")], numbering=ordered(1), alignment="both"),
+            documents.paragraph(children=[_run_with_text("Two-a")], numbering=unordered_nested, alignment="both"),
+            documents.paragraph(children=[_run_with_text("Three")], numbering=ordered(2)),
+        ]),
+    )
+    assert_equal(
+        '<ol>'
+        '<li>One</li>'
+        '<li style="text-align: justify;" value="2">Two'
+        '<ul><li style="text-align: justify;">Two-a</li></ul>'
+        '</li>'
+        '<li value="3">Three</li>'
+        '</ol>',
+        result.value,
+    )
+
+
 def test_bulleted_styles_dont_match_plain_paragraph():
     result = convert_document_element_to_html(
         documents.paragraph(children=[

@@ -82,6 +82,15 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         # not interfere with each other. Each value is another mapping of
         # level -> current counter.
         self._heading_counters = {}
+        # Track the attributes (e.g. value="3", text-align style) of the most
+        # recent list item emitted at each nesting level. A nested list has to
+        # re-enter its parent <li> via collapsible "ancestor" elements, and
+        # mammoth only collapses two elements when their attributes are equal
+        # (see html._is_match). So the synthesised ancestor <ol>/<li> must
+        # carry the *same* attributes as the real parent item; otherwise the
+        # nested list cannot merge into it and spills out as a sibling of the
+        # outer list. We remember those attributes here per level.
+        self._list_ancestor_attributes = {}
 
     def visit_image(self, image, context):
         try:
@@ -118,7 +127,10 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         # Normal list paragraphs (that aren’t headings) are still converted
         # to <ul>/<ol>/<li>.
         if paragraph.numbering is not None and not is_numbered_heading:
-            html_path = self._list_html_path(paragraph.numbering)
+            # Alignment is folded into the list item's attributes inside
+            # _list_html_path so that the tracked ancestor attributes stay in
+            # sync with what the real <li> ends up carrying.
+            html_path = self._list_html_path(paragraph.numbering, paragraph.alignment)
 
             def children():
                 content = self._visit_all(paragraph.children, context)
@@ -127,7 +139,6 @@ class _DocumentConverter(documents.element_visitor(args=1)):
                 else:
                     return [html.force_write] + content
 
-            html_path = self._add_alignment_to_path(html_path, paragraph.alignment)
             return html_path.wrap(children)
 
         def children():
@@ -379,7 +390,7 @@ class _DocumentConverter(documents.element_visitor(args=1)):
     def _find_html_path_for_run(self, run):
         return self._find_html_path(run, "run", default=html_paths.empty, warn_unrecognised=True)
 
-    def _list_html_path(self, numbering):
+    def _list_html_path(self, numbering, alignment=None):
         """Return an HtmlPath that produces the correct <ul>/<ol>/<li>
         hierarchy for the given Word numbering level."""
 
@@ -419,18 +430,37 @@ class _DocumentConverter(documents.element_visitor(args=1)):
                 # Non-first items interrupted list; use value attr to preserve
                 li_attributes["value"] = str(current_value)
 
+        # Fold paragraph alignment into the list item's attributes (rather than
+        # adding it afterwards) so that the attributes we record for ancestor
+        # matching below are exactly what the real <li> ends up carrying.
+        li_attributes = self._apply_alignment_attrs(li_attributes, alignment)
+
         elements = []
 
         # For ancestor levels we don’t know whether they’re ordered or not,
-        # so accept both ul and ol.
-        for _ in range(level):
-            elements.append(html_paths.element(["ul", "ol"], fresh=False))
-            elements.append(html_paths.element("li", fresh=False))
+        # so accept both ul and ol. The ancestor <li>/<ol> are collapsible and
+        # must merge into the real parent list item, which only happens when
+        # their attributes match it exactly (html._is_match). We therefore
+        # replay the attributes recorded for each enclosing level; if a level
+        # was never seen we fall back to empty attributes.
+        for ancestor_level in range(level):
+            ancestor_list_attrs, ancestor_li_attrs = self._list_ancestor_attributes.get(
+                ancestor_level, ({}, {}),
+            )
+            elements.append(html_paths.element(["ul", "ol"], attributes=dict(ancestor_list_attrs), fresh=False))
+            elements.append(html_paths.element("li", attributes=dict(ancestor_li_attrs), fresh=False))
 
         # The actual list for this level
         elements.append(html_paths.element([list_tag], attributes=list_attributes, fresh=False))
         # The list item
         elements.append(html_paths.element("li", attributes=li_attributes, fresh=True))
+
+        # Remember this level's attributes so a deeper nested list can re-enter
+        # this exact <ol>/<li>, and forget any deeper levels which now belong
+        # to a previous (closed) branch of the list.
+        self._list_ancestor_attributes[level] = (list_attributes, li_attributes)
+        for deeper_level in [key for key in self._list_ancestor_attributes if key > level]:
+            del self._list_ancestor_attributes[deeper_level]
 
         return html_paths.path(elements)
 
@@ -449,19 +479,6 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         if alignment is None:
             return html_path
 
-        ALIGN_MAP = {
-            "center": "center",
-            "right": "right",
-            "both": "justify",
-            "justify": "justify",
-            "end": "right",
-            "start": "left",
-            # Treat explicit "left" the same as None (browser default)
-        }
-        css_value = ALIGN_MAP.get(alignment)
-        if css_value in (None, "left"):
-            return html_path
-
         # html_path.elements is an ordered list where the last element is the
         # innermost element (e.g. <p> or <li>).  Create a shallow copy so we
         # don’t mutate the original path shared elsewhere.
@@ -470,17 +487,10 @@ class _DocumentConverter(documents.element_visitor(args=1)):
             return html_path
 
         innermost = elements[-1]
-        # Copy existing attributes and append/merge style
-        attrs = dict(innermost.tag.attributes)
-        existing_style = attrs.get("style", "").strip()
-        align_declaration = "text-align: {0};".format(css_value)
-        if existing_style:
-            # Ensure a trailing semicolon for proper separation
-            if not existing_style.endswith(";"):
-                existing_style += ";"
-            attrs["style"] = "{0} {1}".format(existing_style, align_declaration)
-        else:
-            attrs["style"] = align_declaration
+        # Copy existing attributes and append/merge the alignment style.
+        attrs = self._apply_alignment_attrs(dict(innermost.tag.attributes), alignment)
+        if attrs == innermost.tag.attributes:
+            return html_path
 
         # Rebuild HtmlPathElement with updated attributes, preserving other
         # Tag properties.
@@ -492,6 +502,37 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         )
         elements[-1] = html_paths.HtmlPathElement(new_tag)
         return html_paths.HtmlPath(elements)
+
+    _ALIGNMENT_CSS = {
+        "center": "center",
+        "right": "right",
+        "both": "justify",
+        "justify": "justify",
+        "end": "right",
+        "start": "left",
+        # Treat explicit "left" the same as None (browser default)
+    }
+
+    def _apply_alignment_attrs(self, attrs, alignment):
+        """Merge a ``text-align`` declaration for *alignment* into the *attrs*
+        dict in place and return it. Left/None alignment (the browser default)
+        leaves *attrs* untouched."""
+        if alignment is None:
+            return attrs
+        css_value = self._ALIGNMENT_CSS.get(alignment)
+        if css_value in (None, "left"):
+            return attrs
+
+        existing_style = attrs.get("style", "").strip()
+        align_declaration = "text-align: {0};".format(css_value)
+        if existing_style:
+            # Ensure a trailing semicolon for proper separation
+            if not existing_style.endswith(";"):
+                existing_style += ";"
+            attrs["style"] = "{0} {1}".format(existing_style, align_declaration)
+        else:
+            attrs["style"] = align_declaration
+        return attrs
 
     def _is_heading(self, paragraph):
         """Return True if the paragraph appears to be a heading (style name
