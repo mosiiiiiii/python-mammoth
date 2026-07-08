@@ -515,7 +515,7 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
             .find_children("pic:pic") \
             .find_children("pic:blipFill") \
             .find_children("a:blip")
-        blip_result = _read_blips(blips, alt_text)
+        blip_result = _read_blips(blips, alt_text, _read_drawing_extent(element))
         if blip_result.elements:
             return blip_result
 
@@ -554,6 +554,7 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
                 alt_text=alt_text or summary,
                 content_type="image/png",
                 open=lambda: io.BytesIO(png_bytes),
+                is_chart=True,
             )
         else:
             svg_bytes = charts.render_svg(chart).encode("utf-8")
@@ -561,22 +562,32 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
                 alt_text=alt_text or summary,
                 content_type="image/svg+xml",
                 open=lambda: io.BytesIO(svg_bytes),
+                is_chart=True,
             )
         return _success(image)
 
-    def _read_blips(blips, alt_text):
-        return _ReadResult.concat(lists.map(lambda blip: _read_blip(blip, alt_text), blips))
+    def _read_drawing_extent(element):
+        # The drawing's display size: how large the image appears in the
+        # document, regardless of the media file's intrinsic resolution.
+        attributes = element.find_child_or_null("wp:extent").attributes
+        try:
+            return int(attributes["cx"]), int(attributes["cy"])
+        except (KeyError, TypeError, ValueError):
+            return None
 
-    def _read_blip(element, alt_text):
+    def _read_blips(blips, alt_text, extent=None):
+        return _ReadResult.concat(lists.map(lambda blip: _read_blip(blip, alt_text, extent), blips))
+
+    def _read_blip(element, alt_text, extent=None):
         blip_image = _find_blip_image(element)
 
         if blip_image is None:
             warning = results.warning("Could not find image file for a:blip element")
             return _empty_result_with_message(warning)
         else:
-            return _read_image(blip_image, alt_text)
+            return _read_image(blip_image, alt_text, extent)
 
-    def _read_image(image_file, alt_text):
+    def _read_image(image_file, alt_text, extent=None):
         image_path, open_image = image_file
         content_type = content_types.find_content_type(image_path)
 
@@ -590,6 +601,8 @@ def _create_reader(numbering, content_types, relationships, styles, docx_file, f
                     alt_text=alt_text,
                     content_type="image/png",
                     open=lambda: io.BytesIO(png_bytes),
+                    is_converted_metafile=True,
+                    display_extent_emu=extent,
                 )
                 return _element_result_with_messages(image, [])
 

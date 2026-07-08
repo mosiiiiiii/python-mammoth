@@ -114,6 +114,11 @@ class Image(Element):
     alt_text = cobble.field()
     content_type = cobble.field()
     open = cobble.field()
+    # None (falsy) rather than False: cobble only allows None as a field default.
+    is_chart = cobble.field(default=None)
+    is_converted_metafile = cobble.field(default=None)
+    # (cx, cy) display size in EMU of the drawing the image came from.
+    display_extent_emu = cobble.field(default=None)
 
 
 def document(children, notes=None, comments=None):

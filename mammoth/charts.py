@@ -21,12 +21,19 @@ def text_summary(chart):
     parts = [kind] if not chart.title else ["{0}: {1}".format(kind, chart.title)]
 
     for series in chart.series:
+        # Pie slices are shares of a whole: percentages read better than raw values.
+        total = None
+        if chart.kind == charts_xml.KIND_PIE:
+            total = sum(value for value in series.values if value is not None) or None
         pairs = []
         for index, value in enumerate(series.values):
             if value is None:
                 continue
             label = _label(chart.categories[index]) if index < len(chart.categories) else str(index + 1)
-            pairs.append("{0}={1}".format(label, _fmt(value, precise=True)))
+            if total is not None:
+                pairs.append("{0}={1:.2%}".format(label, value / total))
+            else:
+                pairs.append("{0}={1}".format(label, _fmt(value, precise=True)))
         if pairs:
             prefix = "{0}: ".format(series.name) if series.name else ""
             parts.append(prefix + ", ".join(pairs))
