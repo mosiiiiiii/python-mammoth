@@ -632,6 +632,99 @@ def test_when_initials_are_blank_then_comment_author_label_is_blank():
     )))
 
 
+def _lettered(num_id, restarts=False):
+    return documents.numbering_level(
+        level_index=0, is_ordered=True, num_fmt="lowerLetter",
+        num_id=num_id, abstract_num_id="7", restarts=restarts,
+    )
+
+
+def _item(text, numbering):
+    return documents.paragraph(children=[_run_with_text(text)], numbering=numbering)
+
+
+def test_list_resumed_after_interruption_continues_counting():
+    # Same numbering instance before and after the paragraph: Word goes on
+    # with c), so the resumed item carries its value.
+    result = convert_document_element_to_html(documents.document([
+        _item("One", _lettered("1")),
+        _item("Two", _lettered("1")),
+        _paragraph_with_text("Break"),
+        _item("Three", _lettered("1")),
+    ]))
+    assert_equal(
+        '<ol type="a"><li>One</li><li value="2">Two</li></ol>'
+        '<p>Break</p>'
+        '<ol type="a"><li value="3">Three</li></ol>',
+        result.value,
+    )
+
+
+def test_second_instance_of_same_abstract_numbering_continues_without_start_override():
+    result = convert_document_element_to_html(documents.document([
+        _item("One", _lettered("1")),
+        _paragraph_with_text("Break"),
+        _item("Two", _lettered("2")),
+    ]))
+    assert_equal(
+        '<ol type="a"><li>One</li></ol>'
+        '<p>Break</p>'
+        '<ol type="a"><li value="2">Two</li></ol>',
+        result.value,
+    )
+
+
+def test_instance_with_start_override_restarts_the_count():
+    # Two lists on the same abstract numbering, the second with
+    # w:startOverride: Word shows a) b) and then a) b) again.
+    result = convert_document_element_to_html(documents.document([
+        _item("One", _lettered("1")),
+        _item("Two", _lettered("1")),
+        _paragraph_with_text("Break"),
+        _item("Again one", _lettered("2", restarts=True)),
+        _item("Again two", _lettered("2", restarts=True)),
+    ]))
+    assert_equal(
+        '<ol type="a"><li>One</li><li value="2">Two</li></ol>'
+        '<p>Break</p>'
+        '<ol type="a"><li>Again one</li><li value="2">Again two</li></ol>',
+        result.value,
+    )
+
+
+def test_restarted_list_does_not_merge_into_adjacent_list():
+    result = convert_document_element_to_html(documents.document([
+        _item("One", _lettered("1")),
+        _item("Two", _lettered("1")),
+        _item("Again one", _lettered("2", restarts=True)),
+    ]))
+    assert_equal(
+        '<ol type="a"><li>One</li><li value="2">Two</li></ol>'
+        '<ol type="a"><li>Again one</li></ol>',
+        result.value,
+    )
+
+
+def test_start_override_is_applied_once_per_instance():
+    # The restarted list is itself interrupted and resumed: it must go on
+    # with b), not restart a second time.
+    result = convert_document_element_to_html(documents.document([
+        _item("One", _lettered("1")),
+        _paragraph_with_text("Break"),
+        _item("Again one", _lettered("2", restarts=True)),
+        _paragraph_with_text("Break"),
+        _item("Again two", _lettered("2", restarts=True)),
+    ]))
+    assert_equal(
+        '<ol type="a"><li>One</li></ol>'
+        '<p>Break</p>'
+        '<ol type="a"><li>Again one</li></ol>'
+        '<p>Break</p>'
+        '<ol type="a"><li value="2">Again two</li></ol>',
+        result.value,
+    )
+
+
 def _paragraph_with_text(text):
     return documents.paragraph(children=[_run_with_text(text)])
 

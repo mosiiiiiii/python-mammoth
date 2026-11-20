@@ -87,8 +87,8 @@ def _read_num(element):
                 val=int(start_override)
             except ValueError:
                 continue
-            if val==1:
-                continue
+            # Keep an override of 1 too: it is Word's "restart at 1/a)", and
+            # dropping it makes the list continue the previous one.
             lvl_overrides[lvl_index]=val
 
     return num_id, _Num(abstract_num_id=abstract_num_id, lvl_overrides=lvl_overrides)
@@ -123,7 +123,13 @@ class Numbering(object):
             elif abstract_num.num_style_link is None:
                 level_obj = abstract_num.levels.get(level)
                 start = num.lvl_overrides.get(level, level_obj.start if level_obj else None)
-                return self._to_numbering_level(level_obj, num_id=num_id, abstract_num_id=num.abstract_num_id, start=start)
+                return self._to_numbering_level(
+                    level_obj,
+                    num_id=num_id,
+                    abstract_num_id=num.abstract_num_id,
+                    start=start,
+                    restarts=level in num.lvl_overrides,
+                )
             else:
                 style = self._styles.find_numbering_style_by_id(abstract_num.num_style_link)
                 return self.find_level(style.num_id, level)
@@ -131,7 +137,7 @@ class Numbering(object):
     def find_level_by_paragraph_style_id(self, style_id):
         return self._levels_by_paragraph_style_id.get(style_id)
 
-    def _to_numbering_level(self, abstract_num_level, *, num_id=None, abstract_num_id=None, start=None):
+    def _to_numbering_level(self, abstract_num_level, *, num_id=None, abstract_num_id=None, start=None, restarts=False):
         if abstract_num_level is None:
             return None
         else:
@@ -142,6 +148,7 @@ class Numbering(object):
                 num_id=num_id,
                 abstract_num_id=abstract_num_id,
                 start=(None if start==1 else start),
+                restarts=restarts,
             )
 
 
