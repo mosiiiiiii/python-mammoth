@@ -117,6 +117,34 @@ def test_numbering_level_can_be_found_by_paragraph_style_id():
     assert_equal(None, numbering.find_level_by_paragraph_style_id("Paragraph"))
 
 
+def test_start_override_of_one_marks_the_level_as_restarting():
+    numbering = _read_numbering_xml_element(xml_element("w:numbering", {}, [
+        xml_element("w:abstractNum", {"w:abstractNumId": "42"}, [
+            xml_element("w:lvl", {"w:ilvl": "0"}, [
+                xml_element("w:numFmt", {"w:val": "lowerLetter"}),
+            ]),
+            xml_element("w:lvl", {"w:ilvl": "1"}, [
+                xml_element("w:numFmt", {"w:val": "decimal"}),
+            ]),
+        ]),
+        xml_element("w:num", {"w:numId": "47"}, [
+            xml_element("w:abstractNumId", {"w:val": "42"}),
+        ]),
+        xml_element("w:num", {"w:numId": "48"}, [
+            xml_element("w:abstractNumId", {"w:val": "42"}),
+            xml_element("w:lvlOverride", {"w:ilvl": "0"}, [
+                xml_element("w:startOverride", {"w:val": "1"}),
+            ]),
+        ]),
+    ]))
+
+    assert_equal(None, numbering.find_level("47", "0").restarts)
+    assert_equal(True, numbering.find_level("48", "0").restarts)
+    assert_equal(None, numbering.find_level("48", "0").start)
+    # only the overridden level restarts
+    assert_equal(None, numbering.find_level("48", "1").restarts)
+
+
 def _read_numbering_xml_element(element, styles=None):
     if styles is None:
         styles = Styles.EMPTY
