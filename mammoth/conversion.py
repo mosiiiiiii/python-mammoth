@@ -75,6 +75,10 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         # interrupted and later resumed. The key contains the numbering
         # format and the nesting level so independent lists don’t interfere.
         self._list_counters = {}
+        # (num_id, level) pairs whose w:startOverride has already been
+        # honoured: Word restarts the count once, where the instance is first
+        # used, not every time the list is resumed after an interruption.
+        self._list_restarts_seen = set()
         # Track counters for numbered headings (outline numbering) so we can
         # recreate prefixes such as “1.”, “6.2”, … when headings are also
         # part of a numbered list/outline. Keys are the numbering definition
@@ -411,13 +415,22 @@ class _DocumentConverter(documents.element_visitor(args=1)):
         # Increment running counter and decide whether the current <li>
         # needs its explicit value attribute.
         li_attributes = {}
+        restarted = False
         if ordered:
             key_source = numbering.abstract_num_id or numbering.num_id
             counter_key = (key_source, numbering.level_index)
 
             start_val = numbering.start or 1
+            restart_key = (numbering.num_id, numbering.level_index)
             if counter_key not in self._list_counters:
                  self._list_counters[counter_key] = start_val - 1
+            elif numbering.restarts and restart_key not in self._list_restarts_seen:
+                # Another instance of the same abstract numbering has already
+                # counted, and this one says "restart": begin again.
+                self._list_counters[counter_key] = start_val - 1
+                restarted = True
+            if numbering.restarts:
+                self._list_restarts_seen.add(restart_key)
 
             # Increment
             self._list_counters[counter_key] += 1
@@ -450,8 +463,10 @@ class _DocumentConverter(documents.element_visitor(args=1)):
             elements.append(html_paths.element(["ul", "ol"], attributes=dict(ancestor_list_attrs), fresh=False))
             elements.append(html_paths.element("li", attributes=dict(ancestor_li_attrs), fresh=False))
 
-        # The actual list for this level
-        elements.append(html_paths.element([list_tag], attributes=list_attributes, fresh=False))
+        # The actual list for this level. A restarted list gets a list element
+        # of its own, so it cannot merge into the one it restarts from when
+        # the two are adjacent.
+        elements.append(html_paths.element([list_tag], attributes=list_attributes, fresh=restarted))
         # The list item
         elements.append(html_paths.element("li", attributes=li_attributes, fresh=True))
 

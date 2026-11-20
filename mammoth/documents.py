@@ -228,9 +228,14 @@ class _NumberingLevel(object):
     abstract_num_id = cobble.field(default=None)
     # The starting number/letter for this level (None means 1)
     start = cobble.field(default=None)
+    # True when this numbering instance (w:num) carries a w:startOverride for
+    # this level, i.e. Word restarts the count here instead of continuing the
+    # one shared with the other instances of the same abstract numbering.
+    # None means no (cobble only allows None as a default).
+    restarts = cobble.field(default=None)
 
-def numbering_level(level_index, is_ordered, *, num_fmt=None, num_id=None, abstract_num_id=None, start=None):
-    return _NumberingLevel(str(level_index), bool(is_ordered), num_fmt, num_id, abstract_num_id, start)
+def numbering_level(level_index, is_ordered, *, num_fmt=None, num_id=None, abstract_num_id=None, start=None, restarts=False):
+    return _NumberingLevel(str(level_index), bool(is_ordered), num_fmt, num_id, abstract_num_id, start, True if restarts else None)
 
 @cobble.data
 class Note(Element):
